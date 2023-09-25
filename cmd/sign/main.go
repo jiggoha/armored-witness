@@ -162,11 +162,11 @@ func main() {
 	// Get note.
 	firmwareBytes, err := os.ReadFile(*firmwareFile)
 	if err != nil {
-		log.Fatalf("Failed to read firmware_file %q: %v", *firmwareFile, err)
+		log.Fatalf("failed to read firmware_file %q: %v", *firmwareFile, err)
 	}
 	msg, err := note.Sign(&note.Note{Text: string(firmwareBytes)}, signer)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("failed to sign note text from %q: %v", *firmwareFile, err)
 	}
 	fmt.Println(msg)
 }
