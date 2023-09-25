@@ -128,6 +128,9 @@ func main() {
 	if *keyVersion == 0 {
 		log.Fatal("key_version must be > 0.")
 	}
+	if *keyLocation == "" {
+		log.Fatal("key_location is required.")
+	}
 	if *manifestFile == "" {
 		log.Fatal("manifest_file is required.")
 	}
@@ -149,7 +152,7 @@ func main() {
 		log.Fatalf("failed to create signer: %v", err)
 	}
 
-	// Get note.
+	// Sign manifestFile as note.
 	manifestBytes, err := os.ReadFile(*manifestFile)
 	if err != nil {
 		log.Fatalf("failed to read manifest_file %q: %v", *manifestFile, err)
@@ -158,5 +161,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to sign note text from %q: %v", *manifestFile, err)
 	}
-	fmt.Println(msg)
+
+	// Write output file.
+	if err := os.WriteFile(*outputFile, msg, 0664); err != nil {
+		log.Fatalf("failed to write outputFile %q: %v", *outputFile, err)
+	}
 }
