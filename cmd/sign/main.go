@@ -12,7 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// TODO: comment for tool
+// The sign tool signs an input file in the
+// [note](https://pkg.go.dev/golang.org/x/mod/sumdb/note) format with a key
+// from Google Cloud Platform's
+// [Key Management Service](https://cloud.google.com/kms/docs).
+//
+// It is intended to be used to sign a manifest file for the Armored Witness
+// firmware transparency log.
 package main
 
 import (
@@ -31,38 +37,27 @@ import (
 	"cloud.google.com/go/kms/apiv1/kmspb"
 )
 
-type gcpResources struct {
-	project     string
-	keyRing     string
-	keyName     string
-	keyVersion  uint
-	keyLocation string
-}
-
 type signer struct {
-	// client  *kms.EkmClient
+	ctx     context.Context
 	client  *kms.KeyManagementClient
 	keyHash uint32
-	ctx     context.Context
-	gcp     *gcpResources
+	keyName string
 }
 
 // google.cloud.kms.v1.CryptoKeyVersion.name
 // https://cloud.google.com/php/docs/reference/cloud-kms/latest/V1.CryptoKeyVersion
-var kmsKeyName = "projects/%s/locations/%s/keyRings/%s/cryptoKeys/%s/cryptoKeyVersions/%d"
+var kmsKeyResourceNameFormat = "projects/%s/locations/%s/keyRings/%s/cryptoKeys/%s/cryptoKeyVersions/%d"
 
-func newSigner(ctx context.Context, c *kms.KeyManagementClient, gcp *gcpResources) (*signer, error) {
+func newSigner(ctx context.Context, c *kms.KeyManagementClient, keyName string) (*signer, error) {
 	s := &signer{}
 
 	s.client = c
 	s.ctx = ctx
-	s.gcp = gcp
+	s.keyName = keyName
 
 	// Set keyHash.
 	req := &kmspb.GetPublicKeyRequest{
-		// TODO: pull this out to main.
-		Name: fmt.Sprintf(kmsKeyName, s.gcp.project, s.gcp.keyLocation, s.gcp.keyRing,
-			s.gcp.keyName, s.gcp.keyVersion),
+		Name: s.keyName,
 	}
 	resp, err := c.GetPublicKey(ctx, req)
 	if err != nil {
@@ -70,7 +65,7 @@ func newSigner(ctx context.Context, c *kms.KeyManagementClient, gcp *gcpResource
 	}
 	decoded, _ := pem.Decode([]byte(resp.Pem))
 
-	// Turn pem into first 4 bytes of SHA256 hash.
+	// Convert pem into first 4 bytes of SHA256 hash.
 	h := sha256.New()
 	h.Write(decoded.Bytes)
 	firstFourBytes := h.Sum(nil)[:5]
@@ -80,9 +75,7 @@ func newSigner(ctx context.Context, c *kms.KeyManagementClient, gcp *gcpResource
 }
 
 func (s *signer) Name() string {
-	// TODO: pull this out to main.
-	return fmt.Sprintf(kmsKeyName, s.gcp.project, s.gcp.keyLocation, s.gcp.keyRing,
-		s.gcp.keyName, s.gcp.keyVersion)
+	return s.keyName
 }
 
 // KeyHash returns the first 4 bytes of the SHA256 hash of the signer's public
@@ -94,57 +87,52 @@ func (s *signer) KeyHash() uint32 {
 // Sign returns a signature for the given message.
 func (s *signer) Sign(msg []byte) ([]byte, error) {
 	req := &kmspb.AsymmetricSignRequest{
-		// TODO: pull this out to main.
-		Name: fmt.Sprintf(kmsKeyName, s.gcp.project, s.gcp.keyLocation, s.gcp.keyRing,
-			s.gcp.keyName, s.gcp.keyVersion),
+		Name: s.keyName,
 		Data: msg,
 	}
 	resp, err := s.client.AsymmetricSign(s.ctx, req)
 	if err != nil {
 		return nil, err
 	}
+
 	return resp.GetSignature(), nil
-	// base64 encoded signature
 }
 
 func main() {
-	gcpProject := flag.String("project_name", "armored-witness",
-		"TODO")
-	keyRing := flag.String("key_ring", "armored-witness",
-		"TODO")
-	keyName := flag.String("key_name", "trusted-applet-ci",
-		"TODO")
-	keyVersion := flag.Uint("key_version", 1,
-		"TODO")
-	keyLocation := flag.String("key_location", "europe-west2",
-		"TODO")
-	firmwareFile := flag.String("firmware_file", "trusted_applet.elf",
-		"TODO")
+	gcpProject := flag.String("project_name", "",
+		"The GCP project name where the signing key lives.")
+	keyRing := flag.String("key_ring", "",
+		"Key ring of the signing key. See https://cloud.google.com/kms/docs/resource-hierarchy#key_rings.")
+	keyName := flag.String("key_name", "",
+		"Name of the signing key in the key ring.")
+	keyVersion := flag.Uint("key_version", 0,
+		"Version of the signing key. See https://cloud.google.com/kms/docs/resource-hierarchy#key_versions")
+	keyLocation := flag.String("key_location", "",
+		"Location (GCP region) of the signing key.")
+	manifestFile := flag.String("manifest_file", "",
+		"The file containing the content to sign.")
+	outputFile := flag.String("output_file", "",
+		"The file to write the note to.")
 
 	flag.Parse()
 
-	// if *gcpProject == "" {
-	// 	log.Fatal("project_name is required.")
-	// }
-	// if *keyRing == "" {
-	// 	log.Fatal("key_ring is required.")
-	// }
-	// if *keyName == "" {
-	// 	log.Fatal("key_name is required.")
-	// }
-	// if *keyVersion == "" {
-	// 	log.Fatal("key_version is required.")
-	// }
-	// if *firmwareFile == "" {
-	// 	log.Fatal("firmware_file is required.")
-	// }
-
-	gcp := &gcpResources{
-		project:     *gcpProject,
-		keyRing:     *keyRing,
-		keyName:     *keyName,
-		keyVersion:  *keyVersion,
-		keyLocation: *keyLocation,
+	if *gcpProject == "" {
+		log.Fatal("project_name is required.")
+	}
+	if *keyRing == "" {
+		log.Fatal("key_ring is required.")
+	}
+	if *keyName == "" {
+		log.Fatal("key_name is required.")
+	}
+	if *keyVersion == 0 {
+		log.Fatal("key_version must be > 0.")
+	}
+	if *manifestFile == "" {
+		log.Fatal("manifest_file is required.")
+	}
+	if *outputFile == "" {
+		log.Fatal("output_file is required.")
 	}
 
 	ctx := context.Background()
@@ -154,19 +142,21 @@ func main() {
 	}
 	defer kmClient.Close()
 
-	signer, err := newSigner(ctx, kmClient, gcp)
+	kmsKeyResourceName := fmt.Sprintf(kmsKeyResourceNameFormat, *gcpProject, *keyLocation,
+		*keyRing, *keyName, *keyVersion)
+	signer, err := newSigner(ctx, kmClient, kmsKeyResourceName)
 	if err != nil {
 		log.Fatalf("failed to create signer: %v", err)
 	}
 
 	// Get note.
-	firmwareBytes, err := os.ReadFile(*firmwareFile)
+	manifestBytes, err := os.ReadFile(*manifestFile)
 	if err != nil {
-		log.Fatalf("failed to read firmware_file %q: %v", *firmwareFile, err)
+		log.Fatalf("failed to read manifest_file %q: %v", *manifestFile, err)
 	}
-	msg, err := note.Sign(&note.Note{Text: string(firmwareBytes)}, signer)
+	msg, err := note.Sign(&note.Note{Text: string(manifestBytes)}, signer)
 	if err != nil {
-		log.Fatalf("failed to sign note text from %q: %v", *firmwareFile, err)
+		log.Fatalf("failed to sign note text from %q: %v", *manifestFile, err)
 	}
 	fmt.Println(msg)
 }
