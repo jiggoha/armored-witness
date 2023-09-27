@@ -38,6 +38,9 @@ import (
 )
 
 type signer struct {
+	// ctx must be stored because signer is used as an implementation of the
+	// note.Signer interface, which does not allow for a context in the Sign
+	// method. However, the KMS AsymmetricSign API requires a context.
 	ctx     context.Context
 	client  *kms.KeyManagementClient
 	keyHash uint32
@@ -46,7 +49,7 @@ type signer struct {
 
 // google.cloud.kms.v1.CryptoKeyVersion.name
 // https://cloud.google.com/php/docs/reference/cloud-kms/latest/V1.CryptoKeyVersion
-var kmsKeyResourceNameFormat = "projects/%s/locations/%s/keyRings/%s/cryptoKeys/%s/cryptoKeyVersions/%d"
+const kmsKeyResourceNameFormat = "projects/%s/locations/%s/keyRings/%s/cryptoKeys/%s/cryptoKeyVersions/%d"
 
 func newSigner(ctx context.Context, c *kms.KeyManagementClient, keyName string) (*signer, error) {
 	s := &signer{}
@@ -64,12 +67,9 @@ func newSigner(ctx context.Context, c *kms.KeyManagementClient, keyName string) 
 		return nil, err
 	}
 	decoded, _ := pem.Decode([]byte(resp.Pem))
-
-	// Convert pem into first 4 bytes of SHA256 hash.
-	h := sha256.New()
-	h.Write(decoded.Bytes)
-	firstFourBytes := h.Sum(nil)[:5]
-	s.keyHash = binary.BigEndian.Uint32(firstFourBytes)
+	// Calculate key hash from the checksum of the public key DER.
+	checksum := sha256.Sum256(decoded.Bytes)
+	s.keyHash = binary.BigEndian.Uint32(checksum[:])
 
 	return s, nil
 }
@@ -99,17 +99,17 @@ func (s *signer) Sign(msg []byte) ([]byte, error) {
 }
 
 func main() {
-	gcpProject := flag.String("project_name", "",
+	gcpProject := flag.String("project_name", "serverless-log",
 		"The GCP project name where the signing key lives.")
-	keyRing := flag.String("key_ring", "",
+	keyRing := flag.String("key_ring", "armored-witness",
 		"Key ring of the signing key. See https://cloud.google.com/kms/docs/resource-hierarchy#key_rings.")
-	keyName := flag.String("key_name", "",
+	keyName := flag.String("key_name", "trusted-os",
 		"Name of the signing key in the key ring.")
-	keyVersion := flag.Uint("key_version", 0,
+	keyVersion := flag.Uint("key_version", 1,
 		"Version of the signing key. See https://cloud.google.com/kms/docs/resource-hierarchy#key_versions")
-	keyLocation := flag.String("key_location", "",
+	keyLocation := flag.String("key_location", "europe-west2",
 		"Location (GCP region) of the signing key.")
-	manifestFile := flag.String("manifest_file", "",
+	manifestFile := flag.String("manifest_file", "trusted_os.elf",
 		"The file containing the content to sign.")
 	outputFile := flag.String("output_file", "",
 		"The file to write the note to.")
